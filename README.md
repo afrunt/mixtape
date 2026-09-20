@@ -279,6 +279,25 @@ docker run --rm afrunt/mixtape --help
 Converted WAV files, `.m3u` playlists, and `mixtape.txt` will appear on the
 host under `./out` after the container exits.
 
+### Continuous delivery to Docker Hub
+
+Every push to `main` triggers
+[`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml),
+which builds the image from the `Dockerfile` and pushes it to Docker Hub as
+`afrunt/mixtape:latest`, alongside a short-commit-SHA tag
+(`afrunt/mixtape:sha-<short-sha>`) for pinning to an exact build. The
+workflow can also be triggered manually from the Actions tab
+(`workflow_dispatch`).
+
+It authenticates using two repository secrets that must be configured under
+**Settings → Secrets and variables → Actions** before the workflow can push
+successfully:
+
+| Secret | Value |
+|--------|-------|
+| `DOCKERHUB_USERNAME` | The Docker Hub account/organization that owns the `afrunt/mixtape` repository. |
+| `DOCKERHUB_TOKEN` | A Docker Hub [access token](https://hub.docker.com/settings/security) (not the account password). |
+
 ## Sample albums
 
 This repository includes one sample album committed to the repository
