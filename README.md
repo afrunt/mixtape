@@ -105,6 +105,39 @@ docker build -t afrunt/mixtape .
 If you'd rather run the script natively instead of via Docker, see
 [Requirements](#requirements) and [Usage](#usage) below.
 
+### Cross-platform wrapper script
+
+Typing out the `docker run -v ... -v ... afrunt/mixtape ...` invocation by
+hand works, but [mixtape-wrapper.sh](mixtape-wrapper.sh) does it for you:
+it imitates `mixtape.sh`'s own command-line interface exactly, while
+delegating all the real work to the Docker image underneath. Every `--path`
+and `--dest` directory you pass is a normal host path — the wrapper mounts
+it into the container and rewrites the option for you — and every other
+flag (`--length`, `--include-artist-name`, `--dry-run`, `--normalize`,
+`--fit-to-side`, `--help`, ...) is forwarded to the container unchanged.
+
+```sh
+./mixtape-wrapper.sh --path albums/album-one --path albums/album-two \
+  --dest ./out --length 90 --fit-to-side --normalize
+```
+
+is equivalent to running `mixtape.sh` natively with those same arguments,
+with none of the volume-mount bookkeeping shown earlier in this section.
+
+The wrapper is a plain bash script, so it runs unmodified on Linux, macOS,
+and Windows (via Git Bash/MSYS2 or WSL) — the only requirements are `bash`
+and `docker` on `PATH`; it takes care of the host-path translation Docker
+Desktop for Windows needs internally (using `cygpath` when running under
+Git Bash/MSYS2), so the exact same command line works the same way on all
+three platforms. To use a different image (for example one you built
+locally under another tag), set `MIXTAPE_DOCKER_IMAGE` in the environment
+rather than passing an extra flag, keeping the CLI itself identical to
+`mixtape.sh`'s:
+
+```sh
+MIXTAPE_DOCKER_IMAGE=afrunt/mixtape:sha-abc1234 ./mixtape-wrapper.sh --path albums/my-album
+```
+
 ## Supported album layouts
 
 | Layout | Detection rule | Metadata source |
@@ -488,6 +521,40 @@ docker build -t afrunt/mixtape .
 
 Якщо ви волієте запускати скрипт нативно замість Docker, дивіться
 [Вимоги](#вимоги) та [Використання](#використання) нижче.
+
+### Кросплатформенний скрипт-обгортка
+
+Вручну набирати виклик `docker run -v ... -v ... afrunt/mixtape ...` цілком
+можливо, але [mixtape-wrapper.sh](mixtape-wrapper.sh) робить це за вас: він
+точно імітує власний інтерфейс командного рядка `mixtape.sh`, делегуючи
+всю справжню роботу Docker-образу під капотом. Кожна директорія, передана
+через `--path` та `--dest`, — це звичайний шлях на хості: обгортка сама
+монтує його в контейнер і переписує параметр, а всі інші прапорці
+(`--length`, `--include-artist-name`, `--dry-run`, `--normalize`,
+`--fit-to-side`, `--help` тощо) передаються в контейнер без змін.
+
+```sh
+./mixtape-wrapper.sh --path albums/album-one --path albums/album-two \
+  --dest ./out --length 90 --fit-to-side --normalize
+```
+
+еквівалентно запуску `mixtape.sh` нативно з тими самими аргументами, без
+жодної ручної роботи з монтуванням томів, показаної раніше в цьому
+розділі.
+
+Обгортка — це звичайний bash-скрипт, тож вона працює без змін на Linux,
+macOS та Windows (через Git Bash/MSYS2 чи WSL) — єдині вимоги: `bash` та
+`docker` у `PATH`; вона самостійно виконує перетворення шляхів хоста, яке
+потрібне Docker Desktop для Windows (використовуючи `cygpath` під час
+роботи в Git Bash/MSYS2), тож той самий рядок команди працює однаково на
+всіх трьох платформах. Щоб використати інший образ (наприклад, зібраний
+локально під іншим тегом), встановіть змінну середовища
+`MIXTAPE_DOCKER_IMAGE` замість додавання окремого прапорця — це зберігає
+інтерфейс командного рядка ідентичним до `mixtape.sh`:
+
+```sh
+MIXTAPE_DOCKER_IMAGE=afrunt/mixtape:sha-abc1234 ./mixtape-wrapper.sh --path albums/my-album
+```
 
 ## Підтримувані структури альбомів
 
