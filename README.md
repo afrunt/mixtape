@@ -281,15 +281,20 @@ host under `./out` after the container exits.
 
 ## Sample albums
 
-This repository includes two sample albums under `albums/` for trying the
-script out:
-
-* `albums/eye2eye-mp3/` — individually tagged mp3 files.
-* `albums/eye2eye-flac/` — a single flac file with a companion `.cue`
-  sheet (no embedded per-track tags).
+This repository includes one sample album committed to the repository
+under `albums/eye2eye-mp3/` — individually tagged mp3 files — for trying
+the script out:
 
 ```sh
 ./mixtape.sh --path albums/eye2eye-mp3 --dest ./mixtape
+```
+
+The repository also supports a flac+cue layout (a single flac file plus a
+companion `.cue` sheet, no embedded per-track tags); such an album isn't
+committed here (large binary audio), but the same command works against
+one if you provide it locally, e.g. under `albums/eye2eye-flac/`:
+
+```sh
 ./mixtape.sh --path albums/eye2eye-flac --dest ./mixtape
 ```
 
