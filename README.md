@@ -99,7 +99,7 @@ not fit the requested tape capacity, the script fails with a clear error
 before writing any output.
 
 ```sh
-./mixtape.sh --path albums/eye2eye-mp3 --path albums/eye2eye-flac --length 90,90
+./mixtape.sh --path albums/album-one --path albums/album-two --length 90,90
 ```
 
 If `--length` names more tapes than are needed to hold all the tracks, the
@@ -163,7 +163,7 @@ individual track logs a start and completion line with its own elapsed time,
 so a slow track is easy to spot in a long run:
 
 ```
-[mixtape] Scanning album 1/1: albums/eye2eye-mp3
+[mixtape] Scanning album 1/1: albums/album-one
 [mixtape] Stage 'album scanning' completed in 2s
 [mixtape] Converting track 1/15: 'Mysterious' -> '01.wav'...
 [mixtape] Converted track 1/15: 'Mysterious' in 1s
@@ -188,14 +188,14 @@ Convert an mp3 album onto a single 90-minute tape, writing output to
 `./mixtape`:
 
 ```sh
-./mixtape.sh --path albums/eye2eye-mp3
+./mixtape.sh --path albums/mp3-album
 ```
 
 Split a flac+cue album across a 90-minute tape followed by a 60-minute
 tape, writing to a custom destination:
 
 ```sh
-./mixtape.sh --path albums/eye2eye-flac --length 90,60 --dest ./out
+./mixtape.sh --path albums/flac-cue-album --length 90,60 --dest ./out
 ```
 
 Example `mixtape.txt` excerpt:
@@ -220,7 +220,7 @@ Add `--include-artist-name` to prefix each track line with `Artist - Title`
 (tracks without artist metadata still show the title alone):
 
 ```sh
-./mixtape.sh --path albums/eye2eye-mp3 --include-artist-name
+./mixtape.sh --path albums/mp3-album --include-artist-name
 ```
 
 ```text
@@ -234,7 +234,7 @@ Add `--dry-run` to quickly check the tape/side layout — only `mixtape.txt`
 is written, with no WAV conversion, `.m3u` playlists, or cover art copying:
 
 ```sh
-./mixtape.sh --path albums/eye2eye-mp3 --length 90,90 --dry-run
+./mixtape.sh --path albums/mp3-album --length 90,90 --dry-run
 ```
 
 Add `--normalize` to level out loudness differences across tracks/albums,
@@ -242,7 +242,7 @@ using the same algorithm as Audacity's Normalize effect (DC offset removal
 + peak gain to -1.0 dB):
 
 ```sh
-./mixtape.sh --path albums/eye2eye-mp3 --path albums/eye2eye-flac --normalize
+./mixtape.sh --path albums/album-one --path albums/album-two --normalize
 ```
 
 ## Running with Docker
@@ -265,7 +265,7 @@ the same flags as the native script — `--path`/`--dest` refer to paths
 
 ```sh
 docker run --rm \
-  -v "$(pwd)/albums/eye2eye-mp3:/album:ro" \
+  -v "$(pwd)/albums/my-album:/album:ro" \
   -v "$(pwd)/out:/out" \
   afrunt/mixtape --path /album --dest /out --length 90
 ```
@@ -297,25 +297,6 @@ successfully:
 |--------|-------|
 | `DOCKERHUB_USERNAME` | The Docker Hub account/organization that owns the `afrunt/mixtape` repository. |
 | `DOCKERHUB_TOKEN` | A Docker Hub [access token](https://hub.docker.com/settings/security) (not the account password). |
-
-## Sample albums
-
-This repository includes one sample album committed to the repository
-under `albums/eye2eye-mp3/` — individually tagged mp3 files — for trying
-the script out:
-
-```sh
-./mixtape.sh --path albums/eye2eye-mp3 --dest ./mixtape
-```
-
-The repository also supports a flac+cue layout (a single flac file plus a
-companion `.cue` sheet, no embedded per-track tags); such an album isn't
-committed here (large binary audio), but the same command works against
-one if you provide it locally, e.g. under `albums/eye2eye-flac/`:
-
-```sh
-./mixtape.sh --path albums/eye2eye-flac --dest ./mixtape
-```
 
 ## Notes and limitations
 

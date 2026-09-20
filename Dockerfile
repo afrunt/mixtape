@@ -8,7 +8,7 @@
 #
 # Run (album and output directories are bind-mounted from the host):
 #   docker run --rm \
-#     -v "$(pwd)/albums/eye2eye-mp3:/album:ro" \
+#     -v "$(pwd)/albums/my-album:/album:ro" \
 #     -v "$(pwd)/out:/out" \
 #     afrunt/mixtape --path /album --dest /out --length 90
 
