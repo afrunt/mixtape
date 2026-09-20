@@ -137,7 +137,7 @@ No other external tools are required.
 ## Usage
 
 ```sh
-mixtape.sh --path <album-dir> [--path <album-dir> ...] [--length <list>] [--dest <dir>] [--normalize] [--fit-to-side]
+mixtape.sh --path <album-dir> [--path <album-dir> ...] [--length <list>] [--dest <dir>] [--include-artist-name] [--normalize] [--fit-to-side]
 mixtape.sh --help
 ```
 
