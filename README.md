@@ -25,6 +25,86 @@ Given an album directory of `mp3`, `wav`, or `flac` (+ `.cue`) files:
 6. Copies each album's cover art image (if any is found — see below) into
    `--dest` as `cover-NN.<ext>`.
 
+## Running with Docker (recommended)
+
+**The recommended way to run `mixtape.sh` is via the Docker image**, rather
+than running the script natively. The image bundles `mixtape.sh` together
+with `ffmpeg`/`ffprobe`, so nothing needs to be installed on the host
+besides Docker itself — no need to worry about `bash` version, `ffmpeg`
+availability, or any other host dependency described below. It also works
+identically on Linux, macOS, and Windows (via Docker Desktop/WSL2), so
+there's no platform-specific setup at all.
+
+Because the image is built directly from this repository's `Dockerfile`
+and `mixtape.sh`, it always reflects whatever is the newest version of the
+script — rebuilding the image (or pulling a freshly published one) picks
+up every fix and feature automatically, without you needing to track or
+copy the script file yourself.
+
+### Run the image
+
+Mount the album directory (read-only) and an output directory, then pass
+the same flags as the native script — `--path`/`--dest` refer to paths
+*inside the container*, so point them at the mount targets:
+
+```sh
+docker run --rm -it \
+  -v "$(pwd)/albums/my-album:/album:ro" \
+  -v "$(pwd)/out:/out" \
+  afrunt/mixtape --path /album --dest /out --length 90
+```
+
+Running the image with no arguments (or `--help`) prints usage:
+
+```sh
+docker run --rm -it afrunt/mixtape --help
+```
+
+Converted WAV files, `.m3u` playlists, and `mixtape.txt` will appear on the
+host under `./out` after the container exits.
+
+More examples, mounting multiple albums and combining several flags at
+once:
+
+```sh
+# Two albums, custom tape length, each album kept on its own side
+docker run --rm -it \
+  -v "$(pwd)/albums/album-one:/albums/album-one:ro" \
+  -v "$(pwd)/albums/album-two:/albums/album-two:ro" \
+  -v "$(pwd)/out:/out" \
+  afrunt/mixtape \
+  --path /albums/album-one --path /albums/album-two \
+  --dest /out --length 90 --fit-to-side
+
+# Quick dry run to check the layout only, no conversion
+docker run --rm -it \
+  -v "$(pwd)/albums/my-album:/album:ro" \
+  -v "$(pwd)/out:/out" \
+  afrunt/mixtape --path /album --dest /out --length 90,90 --dry-run
+
+# Normalize volume across albums
+docker run --rm -it \
+  -v "$(pwd)/albums/album-one:/albums/album-one:ro" \
+  -v "$(pwd)/albums/album-two:/albums/album-two:ro" \
+  -v "$(pwd)/out:/out" \
+  afrunt/mixtape \
+  --path /albums/album-one --path /albums/album-two \
+  --dest /out --normalize
+```
+
+### Build the image (optional)
+
+Most users don't need this — pull or reuse the image as-is. Build it
+yourself only if you want to modify `mixtape.sh` (or the `Dockerfile`) or
+want to dig into how the image is put together:
+
+```sh
+docker build -t afrunt/mixtape .
+```
+
+If you'd rather run the script natively instead of via Docker, see
+[Requirements](#requirements) and [Usage](#usage) below.
+
 ## Supported album layouts
 
 | Layout | Detection rule | Metadata source |
@@ -283,40 +363,6 @@ instead of possibly sharing a side with the next album:
 ```sh
 ./mixtape.sh --path albums/album-one --path albums/album-two --length 90 --fit-to-side
 ```
-
-## Running with Docker
-
-A prebuilt-style image can be built locally with the included `Dockerfile`;
-it bundles `mixtape.sh` together with `ffmpeg`/`ffprobe` so nothing needs to
-be installed on the host besides Docker.
-
-### Build the image
-
-```sh
-docker build -t afrunt/mixtape .
-```
-
-### Run the image
-
-Mount the album directory (read-only) and an output directory, then pass
-the same flags as the native script — `--path`/`--dest` refer to paths
-*inside the container*, so point them at the mount targets:
-
-```sh
-docker run --rm \
-  -v "$(pwd)/albums/my-album:/album:ro" \
-  -v "$(pwd)/out:/out" \
-  afrunt/mixtape --path /album --dest /out --length 90
-```
-
-Running the image with no arguments (or `--help`) prints usage:
-
-```sh
-docker run --rm afrunt/mixtape --help
-```
-
-Converted WAV files, `.m3u` playlists, and `mixtape.txt` will appear on the
-host under `./out` after the container exits.
 
 ## Notes and limitations
 
