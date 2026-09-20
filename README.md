@@ -57,7 +57,7 @@ No other external tools are required.
 ## Usage
 
 ```sh
-mixtape.sh --path <album-dir> [--path <album-dir> ...] [--length <list>] [--dest <dir>] [--normalize]
+mixtape.sh --path <album-dir> [--path <album-dir> ...] [--length <list>] [--dest <dir>] [--normalize] [--fit-to-side]
 mixtape.sh --help
 ```
 
@@ -71,6 +71,7 @@ mixtape.sh --help
 | `--include-artist-name` | off | When present, prefix each track line in `mixtape.txt` with the track's artist, formatted as `Artist - Title`. If a track has no artist metadata, the title is shown alone even when this flag is set. |
 | `--dry-run` | off | When present, only compute and write `mixtape.txt`; WAV conversion, `.m3u` playlist writing, and cover art copying are all skipped. Useful for quickly checking the tape/side layout without spending time on audio conversion. |
 | `--normalize` | off | When present, normalize every converted WAV track's volume using the same algorithm as Audacity's Normalize effect with its default settings — see [Volume normalization](#volume-normalization). |
+| `--fit-to-side` | off | When present with more than one `--path` album, each album always starts on its own fresh tape side — see [Fitting each album onto its own side](#fitting-each-album-onto-its-own-side). |
 | `--help`, `-h` | | Print help and exit. |
 
 ### Destination directory handling
@@ -107,6 +108,37 @@ extra, fully-unused trailing tapes are simply left out of `mixtape.txt` —
 only tapes that actually have at least one track on either side are listed.
 A tape that is only partially filled (one side used, the other empty) is
 still shown in full, as before.
+
+### Fitting each album onto its own side
+
+By default, when packing multiple albums, a tape side may end up holding
+the tail of one album followed by the head of the next, if both fit.
+`--fit-to-side` changes this: with more than one `--path` album, each album
+always starts on a fresh tape side, even if the previous side still has
+unused room left. An album that is itself longer than one side still
+spans multiple sides as usual — only *different* albums are kept off the
+same side.
+
+```sh
+./mixtape.sh --path albums/album-one --path albums/album-two --length 90 --fit-to-side
+```
+
+If the given `--length` list doesn't leave enough sides to keep every
+album separate this way, the script prints a warning explaining that and
+falls back to the normal packing mode (sides may be shared between
+albums) instead of failing outright:
+
+```
+[mixtape] Warning: --fit-to-side could not place every album onto its own
+tape side with the current --length (2 albums across 1 tape(s)); falling
+back to normal packing, where a tape side may contain tracks from more
+than one album. Recommendation: add another tape, choose a longer --length
+value, or reorder --path so consecutive albums' durations pair up more
+evenly per side.
+```
+
+With a single `--path` album, `--fit-to-side` has no effect (there is only
+one album, so there is nothing to keep off another album's side).
 
 ### Cover art
 
@@ -243,6 +275,13 @@ using the same algorithm as Audacity's Normalize effect (DC offset removal
 
 ```sh
 ./mixtape.sh --path albums/album-one --path albums/album-two --normalize
+```
+
+Add `--fit-to-side` so each album always starts on a fresh tape side
+instead of possibly sharing a side with the next album:
+
+```sh
+./mixtape.sh --path albums/album-one --path albums/album-two --length 90 --fit-to-side
 ```
 
 ## Running with Docker

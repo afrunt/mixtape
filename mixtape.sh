@@ -14,7 +14,7 @@
 # Usage:
 #   mixtape.sh --path <album-dir> [--path <album-dir> ...] [--length <list>]
 #              [--dest <dir>] [--include-artist-name] [--dry-run]
-#              [--normalize]
+#              [--normalize] [--fit-to-side]
 #   mixtape.sh --help
 #
 # Options:
@@ -43,6 +43,13 @@
 #                      any DC offset, then apply gain so each track's peak
 #                      amplitude reaches -1.0 dB. Keeps loudness consistent
 #                      across tracks from different albums. Default: off.
+#   --fit-to-side      With more than one --path album, never let a tape
+#                      side contain tracks from more than one album: each
+#                      album always starts on a fresh side, even if the
+#                      previous side still has unused room. If this can't
+#                      be done with the given --length list, a warning is
+#                      printed and packing falls back to the normal mode
+#                      (sides may be shared between albums). Default: off.
 #   --help, -h        Show this help message and exit.
 #
 # Requirements:
@@ -102,7 +109,7 @@ For an album directory containing mp3, wav, or flac tracks, this script:
 Usage:
   mixtape.sh --path <album-dir> [--path <album-dir> ...] [--length <list>]
              [--dest <dir>] [--include-artist-name] [--dry-run]
-             [--normalize]
+             [--normalize] [--fit-to-side]
   mixtape.sh --help
 
 Options:
@@ -131,6 +138,13 @@ Options:
                      any DC offset, then apply gain so each track's peak
                      amplitude reaches -1.0 dB. Keeps loudness consistent
                      across tracks from different albums. Default: off.
+  --fit-to-side      With more than one --path album, never let a tape
+                     side contain tracks from more than one album: each
+                     album always starts on a fresh side, even if the
+                     previous side still has unused room. If this can't
+                     be done with the given --length list, a warning is
+                     printed and packing falls back to the normal mode
+                     (sides may be shared between albums). Default: off.
   --help, -h        Show this help message and exit.
 
 Requirements:
@@ -152,6 +166,7 @@ mixtape_opt_dest="./mixtape"
 mixtape_opt_include_artist_name=0
 mixtape_opt_dry_run=0
 mixtape_opt_normalize=0
+mixtape_opt_fit_to_side=0
 
 mixtape_parse_args() {
   while [ "$#" -gt 0 ]; do
@@ -193,6 +208,10 @@ mixtape_parse_args() {
         ;;
       --normalize)
         mixtape_opt_normalize=1
+        shift
+        ;;
+      --fit-to-side)
+        mixtape_opt_fit_to_side=1
         shift
         ;;
       --help|-h)
@@ -555,6 +574,7 @@ mixtape_seq_artist=()
 mixtape_seq_duration=()
 mixtape_seq_src=()
 mixtape_seq_start=()
+mixtape_seq_album_idx=()
 mixtape_seq_count=0
 mixtape_num_pad_width=2
 
@@ -698,6 +718,8 @@ mixtape_process_albums() {
   local n
   local album_start
   local cover
+  local seq_start_idx
+  local k
 
   for mixtape_opt_path in "${mixtape_opt_paths[@]}"; do
     i=$((i + 1))
@@ -708,7 +730,16 @@ mixtape_process_albums() {
     mixtape_log "Detected format for '$mixtape_opt_path': $mixtape_format"
     mixtape_extract_tracks
     n="$mixtape_track_count"
+    seq_start_idx="$mixtape_seq_count"
     mixtape_order_tracks
+    # Tag every seq entry just added for this album with the album's
+    # 0-based --path position, so --fit-to-side can detect album
+    # boundaries in the combined cross-album sequence.
+    k="$seq_start_idx"
+    while [ "$k" -lt "$mixtape_seq_count" ]; do
+      mixtape_seq_album_idx[$k]=$((i - 1))
+      k=$((k + 1))
+    done
     mixtape_log "Extracted and ordered $n track(s) from '$mixtape_opt_path' in $((SECONDS - album_start))s"
 
     cover=$(mixtape_find_cover_image)
@@ -773,9 +804,6 @@ mixtape_pack_tracks() {
   local i
   local length
   local side_cap
-  local j
-  local dur
-  local slot
 
   mixtape_log "Packing $mixtape_seq_count track(s) onto $((mixtape_tape_count * 2)) tape side(s)..."
 
@@ -786,15 +814,36 @@ mixtape_pack_tracks() {
     side_cap=$(((length / 2) * 60))
     mixtape_slot_capacity[$((i * 2))]="$side_cap"
     mixtape_slot_capacity[$((i * 2 + 1))]="$side_cap"
-    mixtape_slot_tracks[$((i * 2))]=""
-    mixtape_slot_tracks[$((i * 2 + 1))]=""
-    mixtape_slot_duration[$((i * 2))]=0
-    mixtape_slot_duration[$((i * 2 + 1))]=0
     i=$((i + 1))
   done
 
-  slot=0
-  j=0
+  if [ "$mixtape_opt_fit_to_side" -eq 1 ] && [ "${#mixtape_opt_paths[@]}" -gt 1 ]; then
+    if mixtape_pack_fit_to_side; then
+      mixtape_log "Packed with --fit-to-side: each album starts on its own tape side"
+      return 0
+    fi
+    mixtape_log "Warning: --fit-to-side could not place every album onto its own tape side with the current --length (${#mixtape_opt_paths[@]} albums across $mixtape_tape_count tape(s)); falling back to normal packing, where a tape side may contain tracks from more than one album. Recommendation: add another tape, choose a longer --length value, or reorder --path so consecutive albums' durations pair up more evenly per side."
+  fi
+
+  mixtape_pack_normal
+}
+
+# Default packing: fills tape sides in order, moving to the next side only
+# when a track no longer fits, with no regard for album boundaries (a side
+# may end up containing the tail of one album and the head of the next).
+mixtape_pack_normal() {
+  local j=0
+  local dur
+  local slot=0
+  local i
+
+  i=0
+  while [ "$i" -lt "$mixtape_slot_count" ]; do
+    mixtape_slot_tracks[$i]=""
+    mixtape_slot_duration[$i]=0
+    i=$((i + 1))
+  done
+
   while [ "$j" -lt "$mixtape_seq_count" ]; do
     dur="${mixtape_seq_duration[$j]}"
     while [ "$slot" -lt "$mixtape_slot_count" ] && \
@@ -807,6 +856,57 @@ mixtape_pack_tracks() {
     mixtape_slot_duration[$slot]=$((mixtape_slot_duration[slot] + dur))
     j=$((j + 1))
   done
+}
+
+# --fit-to-side packing attempt: like mixtape_pack_normal, but whenever a
+# track belongs to a different album than the previous track, and the
+# current side already holds anything, packing jumps ahead to the next
+# side first. This guarantees no side ever mixes tracks from two albums.
+# A single album's own tracks may still span multiple sides as normal, if
+# the album itself is longer than one side.
+#
+# Returns 0 and leaves the packed result in mixtape_slot_tracks/duration on
+# success, or returns 1 (with slot state undefined/partial) if the forced
+# album/side alignment runs out of tape sides. The caller must fall back to
+# mixtape_pack_normal in that case.
+mixtape_pack_fit_to_side() {
+  local j=0
+  local dur
+  local album_idx
+  local prev_album=""
+  local slot=0
+  local i
+
+  i=0
+  while [ "$i" -lt "$mixtape_slot_count" ]; do
+    mixtape_slot_tracks[$i]=""
+    mixtape_slot_duration[$i]=0
+    i=$((i + 1))
+  done
+
+  while [ "$j" -lt "$mixtape_seq_count" ]; do
+    dur="${mixtape_seq_duration[$j]}"
+    album_idx="${mixtape_seq_album_idx[$j]}"
+
+    if [ -n "$prev_album" ] && [ "$album_idx" != "$prev_album" ] && \
+      [ "${mixtape_slot_duration[$slot]:-0}" -gt 0 ]; then
+      slot=$((slot + 1))
+    fi
+
+    while [ "$slot" -lt "$mixtape_slot_count" ] && \
+      [ "$((mixtape_slot_duration[slot] + dur))" -gt "${mixtape_slot_capacity[$slot]}" ]; do
+      slot=$((slot + 1))
+    done
+
+    [ "$slot" -lt "$mixtape_slot_count" ] || return 1
+
+    mixtape_slot_tracks[$slot]="${mixtape_slot_tracks[$slot]}$j "
+    mixtape_slot_duration[$slot]=$((mixtape_slot_duration[slot] + dur))
+    prev_album="$album_idx"
+    j=$((j + 1))
+  done
+
+  return 0
 }
 
 # ---------------------------------------------------------------------------
