@@ -183,7 +183,7 @@ mixtape.sh --help
 | `--dest <dir>` | `./mixtape` | Output directory for `mixtape.txt`, the converted WAV files, and the `.m3u` playlists. Created automatically if it doesn't exist. **If it already exists, its contents are removed first**, so the directory always reflects only the current run's output. |
 | `--include-artist-name` | off | When present, prefix each track line in `mixtape.txt` with the track's artist, formatted as `Artist - Title`. If a track has no artist metadata, the title is shown alone even when this flag is set. |
 | `--dry-run` | off | When present, only compute and write `mixtape.txt`; WAV conversion, `.m3u` playlist writing, and cover art copying are all skipped. Useful for quickly checking the tape/side layout without spending time on audio conversion. |
-| `--normalize` | off | When present, normalize every converted WAV track's volume using the same algorithm as Audacity's Normalize effect with its default settings — see [Volume normalization](#volume-normalization). |
+| `--normalize` | off | When present, normalize every converted WAV track's volume by matching its integrated loudness (LUFS) to a fixed target (capped to avoid clipping) — see [Volume normalization](#volume-normalization). |
 | `--fit-to-side` | off | When present with more than one `--path` album, each album always starts on its own fresh tape side — see [Fitting each album onto its own side](#fitting-each-album-onto-its-own-side). |
 | `--help`, `-h` | | Print help and exit. |
 
@@ -274,25 +274,39 @@ can exist even if `cover-01` doesn't (and vice versa).
 
 ### Volume normalization
 
-`--normalize` makes every converted WAV track's loudness consistent, so
-there's no jarring volume jump between tracks pulled from different albums.
-It reproduces Audacity's **Normalize** effect run with its default
-settings, applied independently to each track:
+`--normalize` makes every converted WAV track's *perceived* loudness
+consistent, so there's no jarring volume jump between tracks — including
+between tracks pulled from differently mastered albums — and you never
+need to touch the volume knob on your tape deck partway through a side.
 
 1. Remove any DC offset (a constant bias in the waveform).
-2. Apply a uniform gain to the (now DC-free) track so its peak amplitude
-   reaches **-1.0 dB** — Audacity's own default target level. Both
-   channels are scaled together by the same gain (matching Audacity's
-   default of *not* normalizing stereo channels independently), not
-   boosted or attenuated separately.
+2. Measure the track's integrated loudness in LUFS (the EBU R128 loudness
+   scale) and apply a uniform gain so it reaches a **-16 LUFS** target.
+   Both channels are scaled together by the same gain, not boosted or
+   attenuated separately.
 
-Both measurements are taken with `ffmpeg`'s `astats` filter and the gain is
-applied with its `volume` filter — no extra tools are required beyond the
-`ffmpeg`/`ffprobe` already needed by the rest of the script. A track that is
-completely silent has no measurable peak level; its DC offset is still
-removed, but the gain step is skipped and logged rather than producing an
-error. `--normalize` is off by default, since it adds one to two extra
-`ffmpeg` passes per track.
+Matching *loudness* rather than just peak level matters because two
+albums can share the exact same peak level while sounding very different
+in volume — a heavily compressed/"loudness war" mastered album packs far
+more average energy into the same peak than a more dynamic one. Matching
+peaks alone (as a simple peak normalizer, e.g. Audacity's basic Normalize
+effect, does) leaves that difference fully intact; matching LUFS removes
+it, which is what actually keeps different albums sounding equally loud
+next to each other.
+
+As a safety net, the applied gain is capped so the track's true peak never
+exceeds **-1.0 dBTP**, even if reaching the full loudness target would
+otherwise call for more gain than that — this protects unusually quiet,
+highly dynamic tracks from clipping.
+
+Both measurements are taken with `ffmpeg` (`astats` for DC offset,
+`loudnorm`'s single-pass measurement mode for integrated loudness and true
+peak) and the gain is applied with its `volume` filter — no extra tools
+are required beyond the `ffmpeg`/`ffprobe` already needed by the rest of
+the script. A track that is completely silent has no measurable loudness;
+its DC offset is still removed, but the gain step is skipped and logged
+rather than producing an error. `--normalize` is off by default, since it
+adds one to two extra `ffmpeg` passes per track.
 
 ### Execution stage logging
 
@@ -382,9 +396,9 @@ is written, with no WAV conversion, `.m3u` playlists, or cover art copying:
 ./mixtape.sh --path albums/mp3-album --length 90,90 --dry-run
 ```
 
-Add `--normalize` to level out loudness differences across tracks/albums,
-using the same algorithm as Audacity's Normalize effect (DC offset removal
-+ peak gain to -1.0 dB):
+Add `--normalize` to level out loudness differences across tracks/albums
+by matching integrated loudness (LUFS), not just peak level, so
+differently mastered albums end up sounding equally loud:
 
 ```sh
 ./mixtape.sh --path albums/album-one --path albums/album-two --normalize
@@ -602,7 +616,7 @@ mixtape.sh --help
 | `--dest <dir>` | `./mixtape` | Вихідна директорія для `mixtape.txt`, конвертованих WAV файлів та `.m3u` плейлистів. Створюється автоматично, якщо не існує. **Якщо вона вже існує, її вміст спочатку видаляється**, тож директорія завжди відображає лише результат поточного запуску. |
 | `--include-artist-name` | вимкнено | Якщо вказано, кожен рядок треку в `mixtape.txt` матиме префікс з іменем виконавця у форматі `Artist - Title`. Якщо трек не має метаданих виконавця, показується лише назва, навіть якщо прапорець встановлено. |
 | `--dry-run` | вимкнено | Якщо вказано, обчислюється й записується лише `mixtape.txt`; конвертація WAV, запис `.m3u` плейлистів та копіювання обкладинок пропускаються. Корисно для швидкої перевірки розкладу касет/сторін без витрат часу на конвертацію аудіо. |
-| `--normalize` | вимкнено | Якщо вказано, гучність кожного конвертованого WAV треку нормалізується за тим самим алгоритмом, що й ефект Normalize в Audacity з налаштуваннями за замовчуванням — див. [Нормалізація гучності](#нормалізація-гучності). |
+| `--normalize` | вимкнено | Якщо вказано, гучність кожного конвертованого WAV треку нормалізується шляхом вирівнювання інтегральної гучності (LUFS) до фіксованого цільового рівня (з обмеженням проти кліпінгу) — див. [Нормалізація гучності](#нормалізація-гучності). |
 | `--fit-to-side` | вимкнено | Якщо вказано разом з більш ніж одним `--path` альбомом, кожен альбом завжди починається з нової сторони касети — див. [Розміщення кожного альбому на окремій стороні](#розміщення-кожного-альбому-на-окремій-стороні). |
 | `--help`, `-h` | | Вивести довідку і завершити роботу. |
 
@@ -696,26 +710,41 @@ evenly per side.
 
 ### Нормалізація гучності
 
-`--normalize` вирівнює гучність кожного конвертованого WAV треку, щоб не
-було різкого стрибка гучності між треками з різних альбомів. Це відтворює
-ефект **Normalize** в Audacity із налаштуваннями за замовчуванням,
-застосований незалежно до кожного треку:
+`--normalize` вирівнює *сприйману* гучність кожного конвертованого WAV
+треку, щоб не було різкого стрибка гучності між треками — зокрема між
+треками з по-різному зведених/змастерингованих альбомів — і щоб не
+доводилося чіпати регулятор гучності на магнітофоні посеред сторони.
 
 1. Видалення будь-якого DC зміщення (постійного зсуву у формі хвилі).
-2. Застосування однорідного підсилення до (вже без DC зміщення) треку,
-   щоб його піковий рівень досяг **-1.0 dB** — цільового рівня Audacity
-   за замовчуванням. Обидва канали масштабуються разом з однаковим
-   підсиленням (відповідно до налаштування Audacity за замовчуванням не
-   нормалізувати стерео канали незалежно), а не підсилюються чи
-   послаблюються окремо.
+2. Вимірювання інтегральної гучності треку в LUFS (шкала гучності EBU
+   R128) і застосування однорідного підсилення, щоб досягти цільового
+   рівня **-16 LUFS**. Обидва канали масштабуються разом з однаковим
+   підсиленням, а не підсилюються чи послаблюються окремо.
 
-Обидва виміри виконуються фільтром `astats` в `ffmpeg`, а підсилення
-застосовується фільтром `volume` — жодних додаткових інструментів, крім
-уже потрібних `ffmpeg`/`ffprobe`, не потрібно. Трек, який повністю
-беззвучний, не має вимірюваного пікового рівня; його DC зміщення все одно
-видаляється, але крок підсилення пропускається і фіксується в логах
-замість помилки. `--normalize` вимкнено за замовчуванням, оскільки він
-додає один-два додаткові проходи `ffmpeg` на трек.
+Вирівнювання саме за *гучністю*, а не лише за піковим рівнем, важливе,
+тому що два альбоми можуть мати однаковий піковий рівень, але звучати
+зовсім по-різному за гучністю — сильно стиснутий ("loudness war")
+альбом вміщує значно більше середньої енергії у той самий піковий
+рівень, ніж динамічніший альбом. Вирівнювання лише за піком (як це
+робить простий пік-нормалізатор, наприклад базовий ефект Normalize в
+Audacity) залишає цю різницю недоторканою; вирівнювання за LUFS її
+усуває — саме це й дозволяє різним альбомам звучати однаково гучно один
+поруч з іншим.
+
+Для безпеки застосоване підсилення обмежується так, щоб піковий рівень
+треку ніколи не перевищував **-1.0 dBTP**, навіть якщо для досягнення
+повного цільового рівня гучності знадобилося б більше підсилення — це
+захищає незвично тихі, але дуже динамічні треки від кліпінгу.
+
+Обидва виміри виконуються засобами `ffmpeg` (фільтр `astats` для DC
+зміщення, однопрохідний режим вимірювання фільтра `loudnorm` для
+інтегральної гучності та пікового рівня), а підсилення застосовується
+фільтром `volume` — жодних додаткових інструментів, крім уже потрібних
+`ffmpeg`/`ffprobe`, не потрібно. Трек, який повністю беззвучний, не має
+вимірюваної гучності; його DC зміщення все одно видаляється, але крок
+підсилення пропускається і фіксується в логах замість помилки.
+`--normalize` вимкнено за замовчуванням, оскільки він додає один-два
+додаткові проходи `ffmpeg` на трек.
 
 ### Логування етапів виконання
 
@@ -809,8 +838,9 @@ Side A
 ```
 
 Додайте `--normalize`, щоб вирівняти різницю в гучності між
-треками/альбомами, використовуючи той самий алгоритм, що й ефект
-Normalize в Audacity (видалення DC зміщення + підсилення піку до -1.0 dB):
+треками/альбомами, зіставляючи інтегральну гучність (LUFS), а не лише
+піковий рівень, щоб по-різному змастеринговані альбоми звучали однаково
+гучно:
 
 ```sh
 ./mixtape.sh --path albums/album-one --path albums/album-two --normalize
