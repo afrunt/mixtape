@@ -38,12 +38,14 @@
 #                      tracks would be split without spending time on
 #                      audio conversion. Default: off.
 #   --normalize        Normalize the volume level of every converted WAV
-#                      track: remove any DC offset, then apply gain so each
-#                      track's integrated loudness reaches -16 LUFS (capped
-#                      so its true peak never exceeds -1.0 dBTP). Matching
-#                      loudness (not just peak level) keeps tracks from
-#                      differently mastered albums sounding equally loud
-#                      next to each other. Default: off.
+#                      track: remove any DC offset, then apply two-pass EBU
+#                      R128 loudness normalization (ffmpeg loudnorm) so each
+#                      track's integrated loudness reaches -16 LUFS while its
+#                      true peak stays at or under -1.0 dBTP. Matching
+#                      loudness (not just peak level) with a two-pass
+#                      measure/apply approach keeps every track - across and
+#                      within albums, including tracks with hot true peaks -
+#                      sounding equally loud next to each other. Default: off.
 #   --fit-to-side      With more than one --path album, never let a tape
 #                      side contain tracks from more than one album: each
 #                      album always starts on a fresh side, even if the
@@ -71,11 +73,21 @@ readonly MIXTAPE_VALID_LENGTHS="46 60 90 100 110 120 130"
 # compressed vs. quieter/more dynamic) sounding equally loud next to each
 # other, so no volume knob adjustment is needed between albums on tape.
 readonly MIXTAPE_NORMALIZE_TARGET_LUFS="-16.0"
-# Safety ceiling for the true peak after gain is applied, in dBTP: even
-# when matching loudness would call for more gain than this allows, the
-# applied gain is capped here so quiet-but-highly-dynamic tracks never
-# clip.
+# True peak ceiling for --normalize, in dBTP: ffmpeg's loudnorm filter
+# keeps every processed track's true peak at or under this level while
+# still reaching MIXTAPE_NORMALIZE_TARGET_LUFS, applying gain reduction
+# only where a track's own peaks actually need it (rather than one flat
+# gain for the whole track), so a single hot moment in an otherwise quiet,
+# dynamic track no longer drags its entire average loudness down below
+# every other track's.
 readonly MIXTAPE_NORMALIZE_PEAK_CEILING_DB="-1.0"
+# Loudness range (LRA) target in LU: how much of a track's original
+# loudness variation loudnorm is allowed to preserve while still reaching
+# the integrated-loudness target above. ffmpeg's own default (7 LU) is
+# tighter than typical album masters need; 11 LU gives loudnorm enough
+# headroom to hit the target on wide-dynamic-range tracks without
+# resorting to heavier compression than necessary.
+readonly MIXTAPE_NORMALIZE_LRA="11"
 
 mixtape_err() {
   printf 'mixtape.sh: error: %s\n' "$*" >&2
@@ -143,12 +155,14 @@ Options:
                      tracks would be split without spending time on
                      audio conversion. Default: off.
   --normalize        Normalize the volume level of every converted WAV
-                     track: remove any DC offset, then apply gain so each
-                     track's integrated loudness reaches -16 LUFS (capped
-                     so its true peak never exceeds -1.0 dBTP). Matching
-                     loudness (not just peak level) keeps tracks from
-                     differently mastered albums sounding equally loud
-                     next to each other. Default: off.
+                     track: remove any DC offset, then apply two-pass EBU
+                     R128 loudness normalization (ffmpeg loudnorm) so each
+                     track's integrated loudness reaches -16 LUFS while its
+                     true peak stays at or under -1.0 dBTP. Matching
+                     loudness (not just peak level) with a two-pass
+                     measure/apply approach keeps every track - across and
+                     within albums, including tracks with hot true peaks -
+                     sounding equally loud next to each other. Default: off.
   --fit-to-side      With more than one --path album, never let a tape
                      side contain tracks from more than one album: each
                      album always starts on a fresh side, even if the
@@ -990,18 +1004,25 @@ mixtape_convert_to_wav() {
 
 # Normalizes one WAV file in place so its perceived loudness matches a
 # fixed target across every track and album in the run: removes any DC
-# offset, then measures integrated loudness (LUFS, EBU R128) and applies a
-# single uniform gain so it reaches MIXTAPE_NORMALIZE_TARGET_LUFS. Matching
-# LUFS instead of just peak level is what actually keeps two differently
-# mastered albums (e.g. one dynamic, one loudness-war-compressed) sounding
-# equally loud next to each other - matching peak level alone does not, since
-# a heavily compressed track can have the same peak as a dynamic one while
-# being several dB louder overall. The computed gain is capped so the
-# resulting true peak never exceeds MIXTAPE_NORMALIZE_PEAK_CEILING_DB, which
-# protects quiet-but-highly-dynamic tracks from clipping when the loudness
-# target alone would call for more gain than that. All numeric
-# parsing/formatting is forced to the "C" locale so the decimal point ffmpeg
-# expects is never replaced by a locale-specific decimal comma.
+# offset, then runs ffmpeg's `loudnorm` filter as a proper two-pass EBU
+# R128 loudness normalization (measure, then apply using the measured
+# values) targeting MIXTAPE_NORMALIZE_TARGET_LUFS while keeping the true
+# peak at or under MIXTAPE_NORMALIZE_PEAK_CEILING_DB.
+#
+# A single flat gain cannot always satisfy both the loudness target and
+# the peak ceiling at once: a track with a few hot moments but an
+# otherwise quiet, dynamic body would need its *entire* gain held back
+# just to tame those few peaks, leaving it quieter overall than a more
+# consistently loud track normalized the same way - which is exactly what
+# produced uneven-sounding tracks within the same album previously.
+# `loudnorm`'s two-pass mode avoids this by only reining in the moments
+# that actually approach the ceiling (falling back to a plain gain when a
+# track's dynamics allow it), so most tracks land within a fraction of a
+# dB of the target regardless of how peaky or how dynamic they are.
+#
+# All numeric parsing/formatting is forced to the "C" locale so the
+# decimal point ffmpeg expects is never replaced by a locale-specific
+# decimal comma.
 mixtape_normalize_wav() {
   local wav="$1"
   local title="$2"
@@ -1009,11 +1030,13 @@ mixtape_normalize_wav() {
   local dc_offset
   local shift_val
   local measured_json
-  local loudness_lufs
-  local true_peak_db
-  local loudness_gain_db
-  local peak_headroom_gain_db
-  local gain_db
+  local measured_i
+  local measured_tp
+  local measured_lra
+  local measured_thresh
+  local measured_offset
+  local loudnorm_args
+  local normalize_start="$SECONDS"
 
   dc_offset=$(LC_ALL=C ffmpeg -i "$wav" -af astats=measure_perchannel=0:metadata=0 -f null - 2>&1 \
     | awk '/\] Overall$/{o=1} o && /DC offset:/{print $NF; exit}')
@@ -1023,35 +1046,31 @@ mixtape_normalize_wav() {
   LC_ALL=C ffmpeg -y -v error -i "$wav" -af "dcshift=shift=$shift_val" -c:a pcm_s16le "$tmp" || \
     mixtape_die "failed to remove DC offset while normalizing '$title'"
 
-  measured_json=$(LC_ALL=C ffmpeg -i "$tmp" \
-    -af "loudnorm=I=${MIXTAPE_NORMALIZE_TARGET_LUFS}:TP=${MIXTAPE_NORMALIZE_PEAK_CEILING_DB}:print_format=json" \
-    -f null - 2>&1)
-  loudness_lufs=$(printf '%s' "$measured_json" | awk -F'"' '/"input_i"/{print $4; exit}')
-  true_peak_db=$(printf '%s' "$measured_json" | awk -F'"' '/"input_tp"/{print $4; exit}')
+  loudnorm_args="I=${MIXTAPE_NORMALIZE_TARGET_LUFS}:TP=${MIXTAPE_NORMALIZE_PEAK_CEILING_DB}:LRA=${MIXTAPE_NORMALIZE_LRA}"
 
-  case "$loudness_lufs" in
+  measured_json=$(LC_ALL=C ffmpeg -i "$tmp" -af "loudnorm=${loudnorm_args}:print_format=json" -f null - 2>&1)
+  measured_i=$(printf '%s' "$measured_json" | awk -F'"' '/"input_i"/{print $4; exit}')
+  measured_tp=$(printf '%s' "$measured_json" | awk -F'"' '/"input_tp"/{print $4; exit}')
+  measured_lra=$(printf '%s' "$measured_json" | awk -F'"' '/"input_lra"/{print $4; exit}')
+  measured_thresh=$(printf '%s' "$measured_json" | awk -F'"' '/"input_thresh"/{print $4; exit}')
+  measured_offset=$(printf '%s' "$measured_json" | awk -F'"' '/"target_offset"/{print $4; exit}')
+
+  case "$measured_i" in
     ''|*inf*|*nan*|*-nan*|*-NaN*)
       mv -f "$tmp" "$wav" || \
         mixtape_die "failed to finalize DC-offset removal while normalizing '$title'"
-      mixtape_log "Normalized '$title': removed DC offset $dc_offset; loudness unavailable (silent track), gain skipped"
+      mixtape_log "Normalized '$title': removed DC offset $dc_offset; loudness unavailable (silent track), gain skipped (in $((SECONDS - normalize_start))s)"
       return 0
       ;;
   esac
 
-  loudness_gain_db=$(LC_ALL=C awk -v l="$loudness_lufs" -v t="$MIXTAPE_NORMALIZE_TARGET_LUFS" \
-    'BEGIN { printf "%.6f", t - l }')
-  peak_headroom_gain_db=$(LC_ALL=C awk -v p="$true_peak_db" -v c="$MIXTAPE_NORMALIZE_PEAK_CEILING_DB" \
-    'BEGIN { printf "%.6f", c - p }')
-  # Never let the loudness-matching gain push the true peak past the
-  # ceiling: take whichever of the two candidate gains is smaller.
-  gain_db=$(LC_ALL=C awk -v g="$loudness_gain_db" -v h="$peak_headroom_gain_db" \
-    'BEGIN { print (g < h) ? g : h }')
-
-  LC_ALL=C ffmpeg -y -v error -i "$tmp" -af "volume=${gain_db}dB" -c:a pcm_s16le "$wav" || \
-    mixtape_die "failed to apply normalization gain to '$title'"
+  LC_ALL=C ffmpeg -y -v error -i "$tmp" \
+    -af "loudnorm=${loudnorm_args}:measured_I=${measured_i}:measured_TP=${measured_tp}:measured_LRA=${measured_lra}:measured_thresh=${measured_thresh}:offset=${measured_offset}:print_format=summary" \
+    -c:a pcm_s16le "$wav" || \
+    mixtape_die "failed to apply normalization to '$title'"
 
   rm -f "$tmp"
-  mixtape_log "Normalized '$title': removed DC offset $dc_offset, applied ${gain_db}dB gain (loudness was ${loudness_lufs} LUFS, target ${MIXTAPE_NORMALIZE_TARGET_LUFS} LUFS, true peak was ${true_peak_db}dBTP)"
+  mixtape_log "Normalized '$title': removed DC offset $dc_offset, applied loudness normalization (was ${measured_i} LUFS / ${measured_tp}dBTP true peak; target ${MIXTAPE_NORMALIZE_TARGET_LUFS} LUFS / ${MIXTAPE_NORMALIZE_PEAK_CEILING_DB}dBTP ceiling) in $((SECONDS - normalize_start))s"
 }
 
 mixtape_track_label() {

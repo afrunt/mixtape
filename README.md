@@ -16,7 +16,7 @@ Given an album directory of `mp3`, `wav`, or `flac` (+ `.cue`) files:
    a side boundary. If a track doesn't fit on the current side, it (and
    everything after it) rolls forward to the next side.
 3. Converts every track to a lossless PCM WAV file, optionally normalizing
-   its volume level to a consistent peak (`--normalize`, see below).
+   its volume level to a consistent loudness (`--normalize`, see below).
 4. Writes one Extended `.m3u` playlist per non-empty tape side, with each
    entry's `#EXTINF` line showing `Artist - Title` when artist metadata is
    available (falling back to the title alone otherwise).
@@ -280,10 +280,12 @@ between tracks pulled from differently mastered albums — and you never
 need to touch the volume knob on your tape deck partway through a side.
 
 1. Remove any DC offset (a constant bias in the waveform).
-2. Measure the track's integrated loudness in LUFS (the EBU R128 loudness
-   scale) and apply a uniform gain so it reaches a **-16 LUFS** target.
-   Both channels are scaled together by the same gain, not boosted or
-   attenuated separately.
+2. Run `ffmpeg`'s `loudnorm` filter (EBU R128) as a genuine **two-pass**
+   process: a first pass *measures* the track's integrated loudness, true
+   peak, and loudness range; a second pass feeds those exact measured
+   values back into `loudnorm` to *apply* the correction, targeting
+   **-16 LUFS** integrated loudness while keeping true peak at or under
+   **-1.0 dBTP**.
 
 Matching *loudness* rather than just peak level matters because two
 albums can share the exact same peak level while sounding very different
@@ -294,19 +296,28 @@ effect, does) leaves that difference fully intact; matching LUFS removes
 it, which is what actually keeps different albums sounding equally loud
 next to each other.
 
-As a safety net, the applied gain is capped so the track's true peak never
-exceeds **-1.0 dBTP**, even if reaching the full loudness target would
-otherwise call for more gain than that — this protects unusually quiet,
-highly dynamic tracks from clipping.
+The two-pass approach (rather than one flat gain computed up front)
+matters *within* an album too: some tracks have a true peak that is
+already "hot" (an inter-sample peak above 0 dBFS, common on heavily
+mastered tracks) even before any gain is applied. A single flat gain
+capped to protect that peak would drag the *entire* track quieter than
+the -16 LUFS target, while less-peaky tracks in the same album would
+reach the target exactly — making tracks in the same album sound uneven
+again. Feeding ffmpeg's own measured values back into a second `loudnorm`
+pass lets it apply gentle, track-specific limiting only where a track's
+own dynamics require it, so every track — regardless of how hot its
+peaks are — converges on the same -16 LUFS target while its true peak
+still respects the -1.0 dBTP ceiling. A loudness range (LRA) of `11` LU
+is used for both passes, giving `loudnorm` enough headroom to hit the
+target precisely on dynamic tracks without over-compressing them.
 
-Both measurements are taken with `ffmpeg` (`astats` for DC offset,
-`loudnorm`'s single-pass measurement mode for integrated loudness and true
-peak) and the gain is applied with its `volume` filter — no extra tools
-are required beyond the `ffmpeg`/`ffprobe` already needed by the rest of
-the script. A track that is completely silent has no measurable loudness;
-its DC offset is still removed, but the gain step is skipped and logged
-rather than producing an error. `--normalize` is off by default, since it
-adds one to two extra `ffmpeg` passes per track.
+Both passes are run with `ffmpeg` (`astats` for DC offset, `loudnorm` for
+the measure and apply passes) — no extra tools are required beyond the
+`ffmpeg`/`ffprobe` already needed by the rest of the script. A track that
+is completely silent has no measurable loudness; its DC offset is still
+removed, but the loudness pass is skipped and logged rather than
+producing an error. `--normalize` is off by default, since it adds two
+extra `ffmpeg` passes per track.
 
 ### Execution stage logging
 
@@ -319,13 +330,17 @@ stdout as before.
 Each stage also reports how long it took (in whole seconds), and the script
 prints a total execution time when it finishes. During WAV conversion, every
 individual track logs a start and completion line with its own elapsed time,
-so a slow track is easy to spot in a long run:
+so a slow track is easy to spot in a long run. When `--normalize` is on,
+each track's normalization log line also reports its own elapsed time:
 
 ```
 [mixtape] Scanning album 1/1: albums/album-one
 [mixtape] Stage 'album scanning' completed in 2s
 [mixtape] Converting track 1/15: 'Mysterious' -> '01.wav'...
 [mixtape] Converted track 1/15: 'Mysterious' in 1s
+[mixtape] Normalized 'Mysterious': removed DC offset -0.000254, applied
+loudness normalization (was -8.31 LUFS / 1.88dBTP true peak; target -16.0
+LUFS / -1.0dBTP ceiling) in 13s
 ...
 [mixtape] Stage 'WAV conversion' completed in 5s
 [mixtape] Done.
@@ -444,8 +459,8 @@ instead of possibly sharing a side with the next album:
    сторону, він (і все, що йде після нього) переноситься на наступну
    сторону.
 3. Конвертує кожен трек без втрат у PCM WAV файл, за бажанням
-   нормалізуючи рівень гучності до однакового піку (`--normalize`, див.
-   нижче).
+   нормалізуючи рівень гучності до однакової сприйманої гучності
+   (`--normalize`, див. нижче).
 4. Записує один розширений `.m3u` плейлист для кожної непорожньої сторони
    касети, де кожен рядок `#EXTINF` показує `Artist - Title`, якщо є дані
    про виконавця (інакше — лише назву).
@@ -716,10 +731,12 @@ evenly per side.
 доводилося чіпати регулятор гучності на магнітофоні посеред сторони.
 
 1. Видалення будь-якого DC зміщення (постійного зсуву у формі хвилі).
-2. Вимірювання інтегральної гучності треку в LUFS (шкала гучності EBU
-   R128) і застосування однорідного підсилення, щоб досягти цільового
-   рівня **-16 LUFS**. Обидва канали масштабуються разом з однаковим
-   підсиленням, а не підсилюються чи послаблюються окремо.
+2. Запуск фільтра `loudnorm` (EBU R128) з `ffmpeg` у справжньому
+   **двопрохідному** режимі: перший прохід *вимірює* інтегральну
+   гучність, піковий рівень і діапазон гучності треку; другий прохід
+   передає ці точні виміряні значення назад у `loudnorm`, щоб
+   *застосувати* корекцію з ціллю **-16 LUFS** інтегральної гучності,
+   утримуючи піковий рівень на позначці або нижче **-1.0 dBTP**.
 
 Вирівнювання саме за *гучністю*, а не лише за піковим рівнем, важливе,
 тому що два альбоми можуть мати однаковий піковий рівень, але звучати
@@ -731,20 +748,31 @@ Audacity) залишає цю різницю недоторканою; вирі�
 усуває — саме це й дозволяє різним альбомам звучати однаково гучно один
 поруч з іншим.
 
-Для безпеки застосоване підсилення обмежується так, щоб піковий рівень
-треку ніколи не перевищував **-1.0 dBTP**, навіть якщо для досягнення
-повного цільового рівня гучності знадобилося б більше підсилення — це
-захищає незвично тихі, але дуже динамічні треки від кліпінгу.
+Двопрохідний підхід (замість одного плоского підсилення, обчисленого
+наперед) важливий і *в межах* одного альбому: деякі треки мають уже
+"гарячий" піковий рівень (міжвідліковий пік вище 0 dBFS, поширений на
+сильно змастерингованих треках) ще до застосування будь-якого
+підсилення. Єдине плоске підсилення, обмежене задля захисту цього піку,
+притлумило б *весь* трек тихіше за цільові -16 LUFS, тоді як менш
+"пікові" треки того ж альбому досягали б цілі точно — знову створюючи
+нерівномірність гучності в межах альбому. Передача власних виміряних
+значень `ffmpeg` назад у другий прохід `loudnorm` дозволяє йому
+застосувати м'яке, специфічне для треку обмеження лише там, де це
+дійсно потрібно через динаміку конкретного треку, тож кожен трек —
+незалежно від того, наскільки "гарячі" його піки — сходиться до тієї ж
+цілі -16 LUFS, і водночас його піковий рівень усе одно залишається в
+межах -1.0 dBTP. Для обох проходів використовується діапазон гучності
+(LRA) `11` LU, що дає `loudnorm` достатньо запасу, щоб точно досягти
+цілі на динамічних треках без надмірної компресії.
 
-Обидва виміри виконуються засобами `ffmpeg` (фільтр `astats` для DC
-зміщення, однопрохідний режим вимірювання фільтра `loudnorm` для
-інтегральної гучності та пікового рівня), а підсилення застосовується
-фільтром `volume` — жодних додаткових інструментів, крім уже потрібних
-`ffmpeg`/`ffprobe`, не потрібно. Трек, який повністю беззвучний, не має
-вимірюваної гучності; його DC зміщення все одно видаляється, але крок
-підсилення пропускається і фіксується в логах замість помилки.
-`--normalize` вимкнено за замовчуванням, оскільки він додає один-два
-додаткові проходи `ffmpeg` на трек.
+Обидва проходи виконуються засобами `ffmpeg` (`astats` для DC зміщення,
+`loudnorm` для проходів вимірювання та застосування) — жодних
+додаткових інструментів, крім уже потрібних `ffmpeg`/`ffprobe`, не
+потрібно. Трек, який повністю беззвучний, не має вимірюваної гучності;
+його DC зміщення все одно видаляється, але прохід гучності
+пропускається і фіксується в логах замість помилки. `--normalize`
+вимкнено за замовчуванням, оскільки він додає два додаткові проходи
+`ffmpeg` на трек.
 
 ### Логування етапів виконання
 
@@ -758,13 +786,17 @@ Audacity) залишає цю різницю недоторканою; вирі�
 скрипт виводить загальний час виконання після завершення. Під час
 конвертації WAV кожен окремий трек логує рядок початку та завершення з
 власним витраченим часом, тож повільний трек легко помітити у довгому
-запуску:
+запуску. Коли ввімкнено `--normalize`, рядок логу нормалізації кожного
+треку також повідомляє власний витрачений час:
 
 ```
 [mixtape] Scanning album 1/1: albums/album-one
 [mixtape] Stage 'album scanning' completed in 2s
 [mixtape] Converting track 1/15: 'Mysterious' -> '01.wav'...
 [mixtape] Converted track 1/15: 'Mysterious' in 1s
+[mixtape] Normalized 'Mysterious': removed DC offset -0.000254, applied
+loudness normalization (was -8.31 LUFS / 1.88dBTP true peak; target -16.0
+LUFS / -1.0dBTP ceiling) in 13s
 ...
 [mixtape] Stage 'WAV conversion' completed in 5s
 [mixtape] Done.
